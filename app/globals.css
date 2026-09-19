@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  font-family: -apple-system, "Segoe UI", "Noto Kufi Arabic", Tahoma, sans-serif;
+}
+
+.badge-needs-confirmation {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  display: inline-block;
+}

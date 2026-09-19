@@ -1,0 +1,415 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Users / RBAC ----------
+
+enum Role {
+  OWNER
+  ADMIN
+  SALES_MANAGER
+  SALES_AGENT
+  WEBSITE_REVIEWER
+  SUPPORT_AGENT
+  FINANCE_REVIEWER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  mfaEnabled   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  assignedConversations Conversation[] @relation("AssignedAgent")
+  auditLogs             AuditLog[]
+}
+
+// ---------- Leads ----------
+
+enum LeadStatus {
+  DISCOVERED
+  ANALYZING
+  QUALIFIED
+  REJECTED
+  DEMO_GENERATING
+  DEMO_READY
+  NEEDS_REVIEW
+  MANUAL_OUTREACH_QUEUED
+  FIRST_MESSAGE_SENT
+  AWAITING_REPLY
+  API_MESSAGING_ELIGIBLE
+  CUSTOMER_REPLIED
+  PREVIEW_SENT
+  DECISION_MAKER_CONFIRMED
+  INTERESTED
+  OBJECTION
+  NEGOTIATING
+  AWAITING_DECISION
+  FOLLOW_UP_SCHEDULED
+  PAYMENT_LINK_SENT
+  PAYMENT_PENDING
+  PAYMENT_VERIFICATION_REQUIRED
+  PAID
+  CORRECTIONS_PENDING
+  FINAL_APPROVAL_PENDING
+  APPROVED
+  PUBLISHING
+  PUBLISHED
+  HOSTING_ACTIVE
+  RENEWAL_APPROACHING
+  HOSTING_EXPIRED
+  LOST
+  OPTED_OUT
+  ESCALATED
+}
+
+model Lead {
+  id              String   @id @default(cuid())
+  restaurantName  String
+  category        String? // restaurant | cafe | bakery | dessert | food_truck | group | other
+  cuisineType     String?
+  governorate     String
+  city             String
+  address          String?
+  phone            String?
+  instagramUrl     String?
+  facebookUrl      String?
+  existingWebsite  String?
+  openingHoursRaw  String?
+  mapLat           Float?
+  mapLng           Float?
+  source           String   @default("manual") // manual | csv | search | maps | directory | social
+  status           LeadStatus @default(DISCOVERED)
+  score            Int      @default(0)
+  scoreBreakdown   String?  // JSON string
+  rejectedReason   String?
+  optedOut         Boolean  @default(false)
+  language         String   @default("ar") // ar | ar_en
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  fields            LeadField[]
+  preview           WebsitePreview?
+  publishedWebsite  PublishedWebsite?
+  conversations     Conversation[]
+  manualOutreach    ManualOutreachItem[]
+  crmTransitions    CrmTransition[]
+  paymentLinks      PaymentLink[]
+  payments          Payment[]
+  correctionRequests CorrectionRequest[]
+  followUps         FollowUpSchedule[]
+  approvalTokens    ApprovalToken[]
+  aiInteractions    AiInteraction[]
+}
+
+model LeadField {
+  id                 String   @id @default(cuid())
+  leadId             String
+  lead               Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fieldName          String
+  value              String
+  sourceUrl          String?
+  collectedAt        DateTime @default(now())
+  verificationStatus String   @default("unverified") // unverified | verified | rejected
+
+  @@index([leadId, fieldName])
+}
+
+model ScoringConfig {
+  id        String @id @default(cuid())
+  factor    String @unique
+  weight    Int
+  direction String // positive | negative
+  label     String
+}
+
+// ---------- Website preview / publishing ----------
+
+model WebsitePreview {
+  id                      String   @id @default(cuid())
+  leadId                  String   @unique
+  lead                    Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  slug                    String   @unique
+  contentJson             String
+  template                String   @default("classic-rtl")
+  language                String   @default("ar")
+  needsConfirmationFields String   @default("[]") // JSON string array
+  viewCount               Int      @default(0)
+  lastViewedAt            DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model PublishedWebsite {
+  id                 String   @id @default(cuid())
+  leadId             String   @unique
+  lead               Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  subdomain          String   @unique
+  customDomain       String?
+  customDomainStatus String?  // pending | verified
+  contentJson        String
+  language           String   @default("ar")
+  publishedAt        DateTime @default(now())
+  hostingStartedAt   DateTime @default(now())
+  hostingExpiresAt   DateTime
+  status             String   @default("ACTIVE") // ACTIVE | EXPIRED
+}
+
+// ---------- Meta messaging ----------
+
+enum Platform {
+  INSTAGRAM
+  MESSENGER
+}
+
+model MetaAccount {
+  id            String   @id @default(cuid())
+  platform      Platform
+  accountName   String
+  externalId    String
+  mode          String   @default("mock") // mock | live
+  connectedAt   DateTime @default(now())
+}
+
+model Conversation {
+  id                       String    @id @default(cuid())
+  leadId                   String
+  lead                     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  platform                 Platform
+  metaConversationId       String?
+  recipientId              String?
+  stage                    String    @default("GREETING")
+  messagingWindowExpiresAt DateTime?
+  replyEligible            Boolean   @default(false)
+  aiPaused                 Boolean   @default(false)
+  humanTakeover            Boolean   @default(false)
+  assignedUserId           String?
+  assignedUser             User?     @relation("AssignedAgent", fields: [assignedUserId], references: [id])
+  lastCustomerMessageAt    DateTime?
+  optOut                   Boolean   @default(false)
+  apiErrors                String    @default("[]")
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  messages Message[]
+  notes    ConversationNote[]
+}
+
+model Message {
+  id                 String   @id @default(cuid())
+  conversationId     String
+  conversation       Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction          String   // inbound | outbound
+  platformMessageId  String?
+  text               String
+  attachments        String   @default("[]")
+  aiGenerated        Boolean  @default(false)
+  aiConfidence       Float?
+  deliveryStatus     String   @default("sent") // queued | sent | delivered | failed
+  readStatus         String?  // read | unread
+  approvedByUserId   String?
+  createdAt          DateTime @default(now())
+}
+
+model ConversationNote {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorName     String
+  note           String
+  createdAt      DateTime @default(now())
+}
+
+model ManualOutreachItem {
+  id           String   @id @default(cuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  platform     Platform
+  draftText    String
+  editedText   String?
+  status       String   @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | SENT | REJECTED
+  approvedBy   String?
+  sentAt       DateTime?
+  createdAt    DateTime @default(now())
+}
+
+// ---------- AI audit ----------
+
+model AiInteraction {
+  id             String   @id @default(cuid())
+  leadId         String?
+  lead           Lead?    @relation(fields: [leadId], references: [id])
+  conversationId String?
+  promptVersion  String
+  provider       String
+  model          String
+  stage          String?
+  inputSummary   String
+  outputJson     String
+  confidence     Float
+  toolsUsed      String   @default("[]")
+  approvalStatus String   @default("auto") // auto | escalated | human_reviewed
+  finalAction    String?
+  createdAt      DateTime @default(now())
+}
+
+// ---------- CRM ----------
+
+model CrmTransition {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fromStage String
+  toStage   String
+  actor     String   // ai | human | system
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+// ---------- Pricing / Payments ----------
+
+model PricingConfig {
+  id                        String @id @default(cuid())
+  standardPriceUsdCents     Int    @default(4900)
+  discountTier1UsdCents     Int    @default(4500)
+  discountTier2UsdCents     Int    @default(3900)
+  discountFloorUsdCents     Int    @default(3900)
+  hostingIncludedMonths     Int    @default(3)
+  hostingRenewalMonthlyUsdCents Int @default(500)
+  hostingRenewalYearlyUsdCents  Int @default(4000)
+  customDomainFeeUsdCents   Int    @default(1500)
+  updatedAt                 DateTime @updatedAt
+}
+
+model PaymentLink {
+  id            String   @id @default(cuid())
+  leadId        String
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  purpose       String   @default("setup") // setup | renewal | custom_domain
+  amountUsdCents Int
+  provider      String   @default("mock")
+  url           String
+  status        String   @default("NOT_REQUESTED")
+  externalRef   String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime?
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  leadId          String
+  lead            Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  paymentLinkId   String?
+  amountUsdCents  Int
+  status          String   @default("PENDING") // NOT_REQUESTED|LINK_SENT|PENDING|VERIFICATION_REQUIRED|PAID|FAILED|REFUNDED|DISPUTED
+  provider        String   @default("mock")
+  externalRef     String?
+  receiptUrl      String?
+  verifiedByUserId String?
+  verifiedAt      DateTime?
+  createdAt       DateTime @default(now())
+}
+
+// ---------- Client portal ----------
+
+model ApprovalToken {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model CorrectionRequest {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  field     String
+  oldValue  String?
+  newValue  String
+  status    String   @default("PENDING") // PENDING | APPLIED | REJECTED
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+model FollowUpSchedule {
+  id           String   @id @default(cuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sequenceStep Int
+  dueAt        DateTime
+  status       String   @default("SCHEDULED") // SCHEDULED | SENT | CANCELLED
+  createdAt    DateTime @default(now())
+}
+
+// ---------- Compliance / audit ----------
+
+model OptOut {
+  id          String   @id @default(cuid())
+  leadId      String?
+  identifier  String   // phone/instagram handle/etc.
+  reason      String?
+  createdAt   DateTime @default(now())
+}
+
+model BlockedContact {
+  id         String   @id @default(cuid())
+  identifier String   @unique
+  reason     String?
+  createdAt  DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorType  String   // user | ai | system
+  action     String
+  entityType String
+  entityId   String
+  before     String?
+  after      String?
+  createdAt  DateTime @default(now())
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  to        String
+  subject   String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Settings {
+  id                     String   @id @default("singleton")
+  companyName            String   @default("Digital Menu Iraq")
+  logoUrl                String?
+  brandColor             String   @default("#c9762b")
+  businessDescription    String?
+  aiAssistantName        String   @default("المساعد الرقمي")
+  targetGovernorates     String   @default("[\"Baghdad\",\"Karbala\"]")
+  outreachDailyLimit     Int      @default(25)
+  workingHoursStart      Int      @default(9)
+  workingHoursEnd        Int      @default(21)
+  quietHoursTimezone     String   @default("Asia/Baghdad")
+  followUpHours1         Int      @default(24)
+  followUpHours2         Int      @default(72)
+  followUpHours3         Int      @default(168)
+  aiConfidenceThreshold  Float    @default(0.55)
+  aiBudgetUsdCentsMonthly Int     @default(20000)
+  cloudBudgetUsdCentsMonthly Int  @default(50000)
+  autoFirstMessageEnabled Boolean @default(false)
+  globalAiPause          Boolean  @default(false)
+  emergencyStop          Boolean  @default(false)
+  updatedAt              DateTime @updatedAt
+}
