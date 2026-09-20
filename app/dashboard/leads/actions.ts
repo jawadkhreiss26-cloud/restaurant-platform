@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { assertCan } from "@/lib/core/authz";
 import { logAudit } from "@/lib/audit";
-import { parseCsv } from "@/lib/adapters/leadSource";
+import { parseCsv, getLeadSourceAdapter } from "@/lib/adapters/leadSource";
 import { scoreLead, DEFAULT_SCORING_FACTORS, type LeadSignals } from "@/lib/core/scoring";
 import { transition } from "@/lib/core/crm";
 import { buildWebsiteContent, generatePreviewSlug } from "@/lib/core/preview";
@@ -80,6 +80,71 @@ export async function importCsvAction(formData: FormData) {
     entityType: "Lead",
     entityId: "bulk",
     after: { created }
+  });
+
+  revalidatePath("/dashboard/leads");
+}
+
+export async function discoverLeadsAction(formData: FormData) {
+  const session = await requireSession();
+  assertCan(session.role, "leads:import");
+
+  const governorate = String(formData.get("governorate") || "").trim();
+  const city = String(formData.get("city") || "").trim();
+  if (!governorate) return;
+
+  const adapter = getLeadSourceAdapter();
+  const discovered = await adapter.searchPublicListings({ governorate, city: city || undefined });
+
+  let created = 0;
+  let skipped = 0;
+  for (const d of discovered) {
+    const existing = await prisma.lead.findFirst({
+      where: { restaurantName: d.restaurantName, city: d.city || city, governorate }
+    });
+    if (existing) {
+      skipped++;
+      continue;
+    }
+
+    const phone = d.fields.find((f) => f.fieldName === "phone")?.value ?? null;
+    const address = d.fields.find((f) => f.fieldName === "address")?.value ?? null;
+    const existingWebsite = d.fields.find((f) => f.fieldName === "existingWebsite")?.value ?? null;
+
+    const lead = await prisma.lead.create({
+      data: {
+        restaurantName: d.restaurantName,
+        category: "restaurant",
+        governorate,
+        city: d.city || city,
+        address,
+        phone,
+        existingWebsite,
+        source: "discovery"
+      }
+    });
+
+    for (const f of d.fields) {
+      await prisma.leadField.create({
+        data: {
+          leadId: lead.id,
+          fieldName: f.fieldName,
+          value: f.value,
+          sourceUrl: f.sourceUrl,
+          verificationStatus: "unverified"
+        }
+      });
+    }
+    created++;
+  }
+
+  await logAudit({
+    actorId: session.id,
+    actorType: "user",
+    action: "lead.discover",
+    entityType: "Lead",
+    entityId: "bulk",
+    after: { governorate, city, found: discovered.length, created, skipped }
   });
 
   revalidatePath("/dashboard/leads");
