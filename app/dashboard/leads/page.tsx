@@ -1,13 +1,30 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { createLeadAction, importCsvAction } from "./actions";
+import { createLeadAction, importCsvAction, discoverLeadsAction } from "./actions";
 
 export default async function LeadsPage() {
   const leads = await prisma.lead.findMany({ orderBy: { createdAt: "desc" }, take: 200 });
+  const discoveryEnabled = Boolean(process.env.GOOGLE_PLACES_API_KEY);
 
   return (
     <div className="space-y-8">
       <h1 className="text-xl font-semibold">Leads</h1>
+
+      <div className="bg-white rounded-lg shadow p-4 space-y-2">
+        <h2 className="font-medium mb-1">Discover restaurants automatically</h2>
+        {discoveryEnabled ? (
+          <form action={discoverLeadsAction} className="flex flex-wrap gap-2 items-center">
+            <input name="governorate" placeholder="Governorate (e.g. Baghdad)" required className="border rounded px-3 py-1.5 text-sm" />
+            <input name="city" placeholder="City (optional)" className="border rounded px-3 py-1.5 text-sm" />
+            <button className="bg-brand-600 text-white rounded px-4 py-1.5 text-sm">Search &amp; import</button>
+          </form>
+        ) : (
+          <p className="text-xs text-gray-500">
+            Not connected yet — add a <code>GOOGLE_PLACES_API_KEY</code> to enable automatic
+            restaurant discovery via Google Places.
+          </p>
+        )}
+      </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         <form action={createLeadAction} className="bg-white rounded-lg shadow p-4 space-y-2">
